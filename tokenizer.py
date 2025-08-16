@@ -1,74 +1,55 @@
-import re 
+import re
+import json
 
-# --- Lire le texte brut ---
-with open("the-verdict.txt", "r", encoding="utf-8") as f:
-    raw_text = f.read()
+# 1) Lire le corpus
+with open("dictionnaire_academie_francaise_5eme_edition.txt", "r", encoding="utf-8") as f_in:
+    raw_text = f_in.read()
 
 print("total of character :", len(raw_text))
 print(raw_text[:99])
 
-# ---------------------------------------------------------- #
-
-# Exemple simple
-text = "Hello, world. Is this-- a test?"
-result2 = re.split(r'([,.:;?_!"()\']|--|\s)', text)
-result2 = [item.strip() for item in result2 if item.strip()]
-print(result2)
-
-# Tokenisation du texte complet
+# 2) Tokeniser
 preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', raw_text)
 preprocessed = [item.strip() for item in preprocessed if item.strip()]
-print(preprocessed[:1000])
 
-# --- Tokens spéciaux ---
-SPECIAL_TOKENS = {
-    "<PAD>": 0,
-    "<UNK>": 1,
-    "<BOS>": 2,
-    "<EOS>": 3,
-}
-
-# ------- Créer le vocabulaire -------------
+# 3) Tokens spéciaux + vocab
+SPECIAL_TOKENS = {"<PAD>":0, "<UNK>":1, "<BOS>":2, "<EOS>":3}
 all_words = sorted(set(preprocessed))
-vocab_size = len(all_words)
+vocab = {**SPECIAL_TOKENS,
+         **{tok: i + len(SPECIAL_TOKENS) for i, tok in enumerate(all_words)}}
 
-print("Taille vocab :", vocab_size)
+print("Taille vocab :", len(vocab))
 
-vocab = {token: i + len(SPECIAL_TOKENS) for i, token in enumerate(all_words)}
-vocab = {**SPECIAL_TOKENS, **vocab}  # merge
+# 4) Sauvegarder le vocab (APRES l’avoir construit)
+with open("vocab.json", "w", encoding="utf-8") as f_out:
+    json.dump(vocab, f_out, ensure_ascii=False, indent=2)
 
-for i, item in enumerate(vocab.items()):
-    print(item)
-    if i >= 50:
-        break
+# 5) Recharger si besoin
+with open("vocab.json", "r", encoding="utf-8") as f_in:
+    vocab = json.load(f_in)
 
-# --- Tokenizer V2 ---
+# 6) Tokenizer
 class SimpleTokenizerV1:
     def __init__(self, vocab):
         self.str_to_int = vocab
         self.int_to_str = {i: s for s, i in vocab.items()}
-    
+
     def encode(self, text):
-        preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', text)
-        preprocessed = [item.strip() for item in preprocessed if item.strip()]
-        ids = [self.str_to_int.get(s, self.str_to_int["<UNK>"]) for s in preprocessed]
+        toks = re.split(r'([,.:;?_!"()\']|--|\s)', text)
+        toks = [t.strip() for t in toks if t.strip()]
+        ids = [self.str_to_int.get(t, self.str_to_int["<UNK>"]) for t in toks]
         return [self.str_to_int["<BOS>"]] + ids + [self.str_to_int["<EOS>"]]
-        
+
     def decode(self, ids):
-        tokens = [self.int_to_str[i] for i in ids if i not in {0, 2, 3}]  
+        tokens = [self.int_to_str[i] for i in ids if self.int_to_str.get(i) not in {"<PAD>","<BOS>","<EOS>"}]
         text = " ".join(tokens)
-        text = re.sub(r'\s+([,.?!"()\'])', r'\1', text)
-        return text
+        return re.sub(r'\s+([,.?!"()\'])', r'\1', text)
 
     @staticmethod
     def pad_sequences(sequences, max_len, pad_value=0):
-        return [
-            seq + [pad_value] * (max_len - len(seq)) if len(seq) < max_len else seq[:max_len]
-            for seq in sequences
-        ]
+        return [seq + [pad_value]*(max_len-len(seq)) if len(seq) < max_len else seq[:max_len] for seq in sequences]
 
-
-# --- Test ---
+# 7) Test
 tokenizer = SimpleTokenizerV1(vocab)
 text = """"It's the last he painted, you know," 
        Mrs. Gisburn said with pardonable pride."""
