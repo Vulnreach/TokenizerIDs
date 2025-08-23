@@ -29,6 +29,17 @@ class ImprovedPreTokenizer:
             'words': r'\w+',
         }
 
+self.compiled_patterns = {k: re.compile(v) for k, v in self.patterns.items()}
+
+def pre_tokenize(self, text):
+        # Remplacer ou tagger les entités spéciales pour les protéger
+        for pattern_name in ['urls', 'emails', 'cve', 'ip', 'base64']:
+            text = self.compiled_patterns[pattern_name].sub(lambda m: f'<{pattern_name.upper()}>{m.group(0)}</{pattern_name.upper()}>', text)
+        # Normaliser les whitespaces et contractions
+        text = re.sub(self.patterns['whitespace'], ' ', text)
+        text = re.sub(self.patterns['contractions'], lambda m: ' ' + m.group(0) + ' ', text)
+        return text
+        
 # 2) Tokeniser
 preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', raw_text)
 preprocessed = [item.strip() for item in preprocessed if item.strip()]
