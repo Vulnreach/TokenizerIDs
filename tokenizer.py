@@ -3,10 +3,31 @@ import json
 from collections import defaultdict, Counter
 
 # 1) Lire le corpus
-with open("dictionnaire_academie_francaise_5eme_edition.txt", "r", encoding="utf-8") as f_in:
+with open("the-verdict.txt", "r", encoding="utf-8") as f_in:
     raw_text = f_in.read()
 print("total of character :", len(raw_text))
 print(raw_text[:99])
+
+
+# PRE tokenizer 
+class ImprovedPreTokenizer:
+    def __init__(self):
+        # pattern pour les différent type de token 
+     self.patterns = {
+            'whitespace': r'\s+',
+            'numbers': r'\d+\.?\d*',
+            'urls': r'https?://[^\s]+',
+            'emails': r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}',
+            'mentions': r'@\w+',
+            'hashtags': r'#\w+',
+            'contractions': r"n't|'re|'ve|'ll|'d|'m|'s",
+            'punctuation': r'[.,!?;:()\[\]{}"\'`~]',
+            'special_chars': r'[-_+=<>/\\|*&^%$#@!]',
+            'cve': r'CVE-\d{4}-\d{4,7}',  # Ajout pour vuln
+            'ip': r'\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}',  # Ajout pour logs réseau
+            'base64': r'[A-Za-z0-9+/=]{20,}',  # Ajout pour payloads
+            'words': r'\w+',
+        }
 
 # 2) Tokeniser
 preprocessed = re.split(r'([,.:;?_!"()\']|--|\s)', raw_text)
@@ -47,6 +68,14 @@ class SimpleTokenizerV1:
     @staticmethod
     def pad_sequences(sequences, max_len, pad_value=0):
         return [seq + [pad_value]*(max_len-len(seq)) if len(seq) < max_len else seq[:max_len] for seq in sequences]
+
+    @staticmethod
+    def analyse_tokenizer(tokenizer, test_text):
+        for text in test_text:
+            ids = tokenizer.encode(text)
+            compression_ratio = len(text) / len(ids)
+            print(f"Texte: {text[:50]}...")
+            print(f"Tokens: {len(ids)}, Ratio: {compression_ratio:.2f}\n")
 
 # 7) BPE Tokenizer
 class ByteLevelBPETokenizer:
@@ -123,24 +152,30 @@ class ByteLevelBPETokenizer:
             
         return ' '.join(word)
         
-    def train_bpe(self, text, vocab_size=10000, min_frequency=2):
+    def train_bpe(self, text, vocab_size=50000, min_frequency=2):
         """Entraîne le BPE sur un corpus"""
         # 1. Pre-tokenization et conversion en bytes
         words = re.findall(r'\S+', text)
         word_freqs = Counter(words)
         
+        # 🔍 DIAGNOSTIC 1
+        print(f" Mots uniques dans le corpus: {len(word_freqs)}")
+        print(f"Total mots: {sum(word_freqs.values())}")
+        
         # 2. Conversion en représentation byte-level
         vocab = set()
         for word in word_freqs:
-            # Convertir chaque mot en bytes puis en caractères Unicode
             word_bytes = word.encode('utf-8')
             word_unicode = ''.join(self.byte_encoder[b] for b in word_bytes)
-            # Ajouter un espace à la fin pour marquer les limites des mots
             word_unicode = word_unicode + '</w>'
             vocab.update(word_unicode.split())
             
         # 3. Vocabulaire initial : tous les caractères uniques
         vocab = list(vocab)
+        
+        # 🔍 DIAGNOSTIC 2
+        print(f" Vocabulaire initial (caractères): {len(vocab)}")
+        
         splits = {}
         for word in word_freqs:
             word_bytes = word.encode('utf-8')
@@ -149,7 +184,16 @@ class ByteLevelBPETokenizer:
             
         # 4. Itérations BPE
         num_merges = vocab_size - len(vocab) - len(self.special_tokens)
+        
+        # 🔍 DIAGNOSTIC 3
+        print(f" Target: {vocab_size} tokens")
+        print(f"Merges prévus: {num_merges}")
+        
         for i in range(num_merges):
+            # 🔍 DIAGNOSTIC 4 (progress)
+            if i % 1000 == 0 and i > 0:
+                print(f"  Merge {i}/{num_merges}")
+                
             # Compter toutes les paires
             pairs = defaultdict(int)
             for word, freq in word_freqs.items():
@@ -158,36 +202,37 @@ class ByteLevelBPETokenizer:
                     pairs[(symbols[j], symbols[j + 1])] += freq
                     
             if not pairs:
+                print(f" Arrêt: plus de paires disponibles à {i} merges")
                 break
                 
             # Trouver la paire la plus fréquente
             best_pair = max(pairs, key=pairs.get)
             if pairs[best_pair] < min_frequency:
+                print(f" Arrêt: fréquence trop basse ({pairs[best_pair]}) à {i} merges")
                 break
                 
             # Enregistrer le merge
             self.bpe_ranks[best_pair] = i
-            
-            # Appliquer le merge
             first, second = best_pair
             new_splits = {}
             for word in splits:
                 symbols = splits[word]
                 new_symbols = []
-                i = 0
-                while i < len(symbols):
-                    if i < len(symbols) - 1 and symbols[i] == first and symbols[i + 1] == second:
+                j = 0  # CHANGÉ: utiliser j au lieu de i pour éviter conflit
+                while j < len(symbols):
+                    if j < len(symbols) - 1 and symbols[j] == first and symbols[j + 1] == second:
                         new_symbols.append(first + second)
-                        i += 2
+                        j += 2
                     else:
-                        new_symbols.append(symbols[i])
-                        i += 1
+                        new_symbols.append(symbols[j])
+                        j += 1
                 new_splits[word] = new_symbols
             splits = new_splits
-            
-            # Ajouter le nouveau token au vocabulaire
             vocab.append(first + second)
-            
+        
+        # 🔍 DIAGNOSTIC 5 - Final
+        print(f" Vocabulaire final: {len(vocab) + len(self.special_tokens)} tokens")
+        
         # 5. Construire l'encodeur final
         self.encoder = {**self.special_tokens}
         for i, token in enumerate(vocab):
@@ -251,11 +296,19 @@ ids = tokenizer.encode(text)
 print("IDs:", ids)
 print("Décodé:", tokenizer.decode(ids))
 
+# Test avec du texte cyber
+cyber_samples = [
+    "CVE-2021-44228 affects Apache Log4j versions 2.0-beta9",
+    "192.168.1.100:8080 returned HTTP 200 with SQLi payload",
+    "Base64 payload: dGVzdCBwYXlsb2FkCg== executed successfully"
+]
+SimpleTokenizerV1.analyse_tokenizer(tokenizer, cyber_samples)
+
 print("\n=== Test BPE Tokenizer ===")
 bpe_tokenizer = ByteLevelBPETokenizer()
 # Entraîner sur un échantillon du texte
-sample_text = raw_text[:10000]  # Premier 10k caractères pour test
-bpe_tokenizer.train_bpe(sample_text, vocab_size=5000)
+sample_text = raw_text[:50000]  # Premier 50k caractères pour test
+bpe_tokenizer.train_bpe(sample_text, vocab_size=10000)
 
 # Test d'encodage/décodage
 test_text = "Bonjour le monde! Comment allez-vous?"
